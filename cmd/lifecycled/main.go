@@ -32,6 +32,7 @@ func main() {
 		instanceID                   string
 		snsTopic                     string
 		disableSpotListener          bool
+		enableSpotRebalances         bool
 		handler                      *os.File
 		jsonLogging                  bool
 		debugLogging                 bool
@@ -49,6 +50,9 @@ func main() {
 
 	app.Flag("no-spot", "Disable the spot termination listener").
 		BoolVar(&disableSpotListener)
+
+	app.Flag("enable-spot-rebalances", "Enable spot rebalances").
+		BoolVar(&enableSpotRebalances)
 
 	app.Flag("handler", "The script to invoke to handle events").
 		Required().
@@ -161,6 +165,7 @@ func main() {
 			InstanceID:                   instanceID,
 			SNSTopic:                     snsTopic,
 			SpotListener:                 !disableSpotListener,
+			SpotRebalancesEnabled:        enableSpotRebalances,
 			SpotListenerInterval:         spotListenerInterval,
 			AutoscalingHeartbeatInterval: autoscalingHeartbeatInterval,
 		}, sess, logger)

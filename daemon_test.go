@@ -22,7 +22,7 @@ import (
 	logrus "github.com/sirupsen/logrus/hooks/test"
 )
 
-func newMetadataStub(instanceID, terminationTime string) *httptest.Server {
+func newMetadataStub(instanceID, terminationTime, rebalanceResponse string) *httptest.Server {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var resp string
 
@@ -31,6 +31,8 @@ func newMetadataStub(instanceID, terminationTime string) *httptest.Server {
 			resp = instanceID
 		case "/latest/meta-data/spot/termination-time":
 			resp = terminationTime
+		case "/latest/meta-data/events/recommendations/rebalance":
+			resp = rebalanceResponse
 		}
 
 		if resp == "" {
@@ -76,17 +78,19 @@ func newSQSMessage(instanceID string) *sqs.Message {
 
 func TestDaemon(t *testing.T) {
 	var (
-		instanceID          = "i-000000000000"
-		spotTerminationTime = "2006-01-02T15:04:05+02:00"
+		instanceID            = "i-000000000000"
+		spotTerminationTime   = "2006-01-02T15:04:05+02:00"
+		spotRebalanceResponse = `{"noticeTime":"2006-01-02T15:04:05+02:00"}`
 	)
 
 	tests := []struct {
-		description        string
-		snsTopic           string
-		spotListener       bool
-		subscribeError     error
-		expectedNoticeType string
-		expectDaemonError  bool
+		description          string
+		snsTopic             string
+		spotListener         bool
+		spotRebalanceEnabled bool
+		subscribeError       error
+		expectedNoticeType   string
+		expectDaemonError    bool
 	}{
 		{
 			description:        "works with autoscaling listener",
@@ -97,6 +101,12 @@ func TestDaemon(t *testing.T) {
 			description:        "works with spot termination listener",
 			spotListener:       true,
 			expectedNoticeType: "spot",
+		},
+		{
+			description:          "works with spot rebalance listener",
+			spotListener:         true,
+			spotRebalanceEnabled: true,
+			expectedNoticeType:   "spot",
 		},
 		{
 			description:       "cleans up queue if sns topic does not exist",
@@ -146,7 +156,7 @@ func TestDaemon(t *testing.T) {
 			}
 
 			// Stub the metadata endpoint
-			server := newMetadataStub(instanceID, spotTerminationTime)
+			server := newMetadataStub(instanceID, spotTerminationTime, spotRebalanceResponse)
 			defer server.Close()
 
 			metadata := ec2metadata.New(session.Must(session.NewSession()), &aws.Config{
@@ -160,10 +170,11 @@ func TestDaemon(t *testing.T) {
 			defer cancel()
 
 			config := &lifecycled.Config{
-				InstanceID:           instanceID,
-				SNSTopic:             tc.snsTopic,
-				SpotListener:         tc.spotListener,
-				SpotListenerInterval: 1 * time.Millisecond,
+				InstanceID:            instanceID,
+				SNSTopic:              tc.snsTopic,
+				SpotListener:          tc.spotListener,
+				SpotRebalancesEnabled: tc.spotRebalanceEnabled,
+				SpotListenerInterval:  1 * time.Millisecond,
 			}
 
 			daemon := lifecycled.NewDaemon(config, sq, sn, as, metadata, logger)

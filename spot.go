@@ -2,6 +2,7 @@ package lifecycled
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -12,21 +13,23 @@ import (
 )
 
 // NewSpotListener ...
-func NewSpotListener(instanceID string, metadata *ec2metadata.EC2Metadata, interval time.Duration) *SpotListener {
+func NewSpotListener(instanceID string, metadata *ec2metadata.EC2Metadata, interval time.Duration, rebalancesEnabled bool) *SpotListener {
 	return &SpotListener{
-		listenerType: "spot",
-		instanceID:   instanceID,
-		metadata:     metadata,
-		interval:     interval,
+		listenerType:      "spot",
+		instanceID:        instanceID,
+		metadata:          metadata,
+		interval:          interval,
+		rebalancesEnabled: rebalancesEnabled,
 	}
 }
 
 // SpotListener ...
 type SpotListener struct {
-	listenerType string
-	instanceID   string
-	metadata     *ec2metadata.EC2Metadata
-	interval     time.Duration
+	listenerType      string
+	instanceID        string
+	metadata          *ec2metadata.EC2Metadata
+	interval          time.Duration
+	rebalancesEnabled bool
 }
 
 // Type returns a string describing the listener type.
@@ -50,47 +53,96 @@ func (l *SpotListener) Start(ctx context.Context, notices chan<- TerminationNoti
 		case <-ticker.C:
 			log.Debug("Polling ec2 metadata for spot termination notices")
 
-			out, err := l.metadata.GetMetadata("spot/termination-time")
-			if err != nil {
-				if e, ok := err.(awserr.Error); ok && strings.Contains(e.OrigErr().Error(), "404") {
-					// Metadata returns 404 when there is no termination notice available
-					continue
-				} else {
-					log.WithError(err).Warn("Failed to get spot termination")
-					continue
+			notice := l.getTerminationNotice(log)
+			if notice != nil {
+				notices <- notice
+				return nil
+			}
+
+			if l.rebalancesEnabled {
+				notice = l.getRebalanceNotice(log)
+				if notice != nil {
+					notices <- notice
+					return nil
 				}
 			}
-			if out == "" {
-				log.Error("Empty response from metadata")
-				continue
-			}
-			t, err := time.Parse(time.RFC3339, out)
-			if err != nil {
-				log.WithError(err).Error("Failed to parse termination time")
-				continue
-			}
-			notices <- &spotTerminationNotice{
-				noticeType:      l.Type(),
-				instanceID:      l.instanceID,
-				transition:      "ec2:SPOT_INSTANCE_TERMINATION",
-				terminationTime: t,
-			}
-			return nil
 		}
 	}
 }
 
-type spotTerminationNotice struct {
-	noticeType      string
-	instanceID      string
-	transition      string
-	terminationTime time.Time
+func (l *SpotListener) getTerminationNotice(log *logrus.Entry) *spotNotice {
+	out, err := l.metadata.GetMetadata("spot/termination-time")
+	if err != nil {
+		if e, ok := err.(awserr.Error); ok && strings.Contains(e.OrigErr().Error(), "404") {
+			// Metadata returns 404 when there is no termination notice available
+			return nil
+		} else {
+			log.WithError(err).Warn("Failed to get spot termination notice")
+			return nil
+		}
+	}
+	if out == "" {
+		log.Error("Empty response from spot termination metadata")
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, out)
+	if err != nil {
+		log.WithError(err).Error("Failed to parse termination time")
+		return nil
+	}
+
+	return &spotNotice{
+		noticeType: l.Type(),
+		instanceID: l.instanceID,
+		transition: "ec2:SPOT_INSTANCE_TERMINATION",
+		noticeTime: t,
+	}
 }
 
-func (n *spotTerminationNotice) Type() string {
+func (l *SpotListener) getRebalanceNotice(log *logrus.Entry) *spotNotice {
+	out, err := l.metadata.GetMetadata("events/recommendations/rebalance")
+	if err != nil {
+		if e, ok := err.(awserr.Error); ok && strings.Contains(e.OrigErr().Error(), "404") {
+			// Metadata returns 404 when there is no termination notice available
+			return nil
+		} else {
+			log.WithError(err).Warn("Failed to get spot rebalance notice")
+			return nil
+		}
+	}
+	if out == "" {
+		log.Error("Empty response from spot rebalance metadata")
+		return nil
+	}
+
+	parsed := struct {
+		NoticeTime time.Time `json:"noticeTime"`
+	}{}
+	err = json.Unmarshal([]byte(out), &parsed)
+	if err != nil {
+		log.WithError(err).Error("Failed to parse rebalance notice")
+		return nil
+	}
+
+	return &spotNotice{
+		noticeType: l.Type(),
+		instanceID: l.instanceID,
+		transition: "ec2:SPOT_INSTANCE_REBALANCE",
+		noticeTime: parsed.NoticeTime,
+	}
+}
+
+type spotNotice struct {
+	noticeType string
+	instanceID string
+	transition string
+	noticeTime time.Time
+}
+
+func (n *spotNotice) Type() string {
 	return n.noticeType
 }
 
-func (n *spotTerminationNotice) Handle(ctx context.Context, handler Handler, _ *logrus.Entry) error {
-	return handler.Execute(ctx, n.transition, n.instanceID, n.terminationTime.Format(time.RFC3339))
+func (n *spotNotice) Handle(ctx context.Context, handler Handler, _ *logrus.Entry) error {
+	return handler.Execute(ctx, n.transition, n.instanceID, n.noticeTime.Format(time.RFC3339))
 }

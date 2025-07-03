@@ -43,7 +43,7 @@ func NewDaemon(
 		logger:     logger,
 	}
 	if config.SpotListener {
-		daemon.AddListener(NewSpotListener(config.InstanceID, metadata, config.SpotListenerInterval))
+		daemon.AddListener(NewSpotListener(config.InstanceID, metadata, config.SpotListenerInterval, config.SpotRebalancesEnabled))
 	}
 	if config.SNSTopic != "" {
 		queue := NewQueue(
@@ -62,6 +62,7 @@ type Config struct {
 	InstanceID                   string
 	SNSTopic                     string
 	SpotListener                 bool
+	SpotRebalancesEnabled        bool
 	SpotListenerInterval         time.Duration
 	AutoscalingHeartbeatInterval time.Duration
 }
