@@ -42,9 +42,11 @@ func NewDaemon(
 		instanceID: config.InstanceID,
 		logger:     logger,
 	}
+
 	if config.SpotListener {
 		daemon.AddListener(NewSpotListener(config.InstanceID, metadata, config.SpotListenerInterval, config.SpotRebalancesEnabled))
 	}
+
 	if config.SNSTopic != "" {
 		queue := NewQueue(
 			fmt.Sprintf("lifecycled-%s", config.InstanceID),
@@ -54,6 +56,19 @@ func NewDaemon(
 		)
 		daemon.AddListener(NewAutoscalingListener(config.InstanceID, queue, asgClient, config.AutoscalingHeartbeatInterval))
 	}
+
+	if config.AutoscalingImdsListener {
+		daemon.AddListener(NewAutoscalingImdsListener(
+			config.InstanceID,
+			config.AutoscalingGroupName,
+			config.LifecycleHookName,
+			asgClient,
+			metadata,
+			config.AutoscalingImdsListenerInterval,
+			config.AutoscalingHeartbeatInterval,
+		))
+	}
+
 	return daemon
 }
 
@@ -65,6 +80,12 @@ type Config struct {
 	SpotRebalancesEnabled        bool
 	SpotListenerInterval         time.Duration
 	AutoscalingHeartbeatInterval time.Duration
+
+	// Settings for the autoscaling-imds listener
+	AutoscalingImdsListener         bool
+	AutoscalingImdsListenerInterval time.Duration
+	AutoscalingGroupName            string
+	LifecycleHookName               string
 }
 
 // Daemon is what orchestrates the listening and execution of the handler on a termination notice.

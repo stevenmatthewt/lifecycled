@@ -33,6 +33,8 @@ func newMetadataStub(instanceID, terminationTime, rebalanceResponse string) *htt
 			resp = terminationTime
 		case "/latest/meta-data/events/recommendations/rebalance":
 			resp = rebalanceResponse
+		case "/latest/meta-data/autoscaling/target-lifecycle-state":
+			resp = "Terminated"
 		}
 
 		if resp == "" {
@@ -84,18 +86,24 @@ func TestDaemon(t *testing.T) {
 	)
 
 	tests := []struct {
-		description          string
-		snsTopic             string
-		spotListener         bool
-		spotRebalanceEnabled bool
-		subscribeError       error
-		expectedNoticeType   string
-		expectDaemonError    bool
+		description             string
+		snsTopic                string
+		autoscalingImdsListener bool
+		spotListener            bool
+		spotRebalanceEnabled    bool
+		subscribeError          error
+		expectedNoticeType      string
+		expectDaemonError       bool
 	}{
 		{
 			description:        "works with autoscaling listener",
 			snsTopic:           "topic",
 			expectedNoticeType: "autoscaling",
+		},
+		{
+			description:             "works with autoscaling-imds listener",
+			autoscalingImdsListener: true,
+			expectedNoticeType:      "autoscaling-imds",
 		},
 		{
 			description:        "works with spot termination listener",
@@ -170,11 +178,15 @@ func TestDaemon(t *testing.T) {
 			defer cancel()
 
 			config := &lifecycled.Config{
-				InstanceID:            instanceID,
-				SNSTopic:              tc.snsTopic,
-				SpotListener:          tc.spotListener,
-				SpotRebalancesEnabled: tc.spotRebalanceEnabled,
-				SpotListenerInterval:  1 * time.Millisecond,
+				InstanceID:                      instanceID,
+				SNSTopic:                        tc.snsTopic,
+				SpotListener:                    tc.spotListener,
+				SpotRebalancesEnabled:           tc.spotRebalanceEnabled,
+				SpotListenerInterval:            1 * time.Millisecond,
+				AutoscalingImdsListener:         tc.autoscalingImdsListener,
+				AutoscalingImdsListenerInterval: 1 * time.Millisecond,
+				AutoscalingGroupName:            "TODO",
+				LifecycleHookName:               "TODO",
 			}
 
 			daemon := lifecycled.NewDaemon(config, sq, sn, as, metadata, logger)

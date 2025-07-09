@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
@@ -29,17 +30,20 @@ func main() {
 	app.DefaultEnvars()
 
 	var (
-		instanceID                   string
-		snsTopic                     string
-		disableSpotListener          bool
-		enableSpotRebalances         bool
-		handler                      *os.File
-		jsonLogging                  bool
-		debugLogging                 bool
-		cloudwatchGroup              string
-		cloudwatchStream             string
-		spotListenerInterval         time.Duration
-		autoscalingHeartbeatInterval time.Duration
+		instanceID                    string
+		snsTopic                      string
+		disableSpotListener           bool
+		enableSpotRebalances          bool
+		handler                       *os.File
+		jsonLogging                   bool
+		debugLogging                  bool
+		cloudwatchGroup               string
+		cloudwatchStream              string
+		spotListenerInterval          time.Duration
+		autoscalingHeartbeatInterval  time.Duration
+		enableAutoscalingImdsListener bool
+		autoscalingGroupName          string
+		lifecycleHookName             string
 	)
 
 	app.Flag("instance-id", "The instance id to listen for events for").
@@ -78,6 +82,17 @@ func main() {
 		Default("10s").
 		DurationVar(&autoscalingHeartbeatInterval)
 
+	app.Flag("enable-autoscaling-imds-listener", "Enable the autoscaling-imds listener").
+		BoolVar(&enableAutoscalingImdsListener)
+
+	app.Flag("autoscaling-group-name", "The autoscaling group name to report lifecycle events for. Required when using the autoscaling-imds listener.").
+		StringVar(&autoscalingGroupName)
+
+	app.Flag("lifecycle-hook-name", "The lifecycle hook name to report lifecycle events for. Required when using the autoscaling-imds listener.").
+		StringVar(&lifecycleHookName)
+
+	app.Flag("autoscaling-imds-listener-interval", "Interval to check for autoscaling termination notices")
+
 	app.Action(func(c *kingpin.ParseContext) error {
 		logger := logrus.New()
 		if jsonLogging {
@@ -88,6 +103,14 @@ func main() {
 
 		if debugLogging {
 			logger.SetLevel(logrus.DebugLevel)
+		}
+
+		if enableAutoscalingImdsListener && (autoscalingGroupName == "" || lifecycleHookName == "") {
+			return errors.New("autoscaling-group-name and lifecycle-hook-name must be set when enable-autoscaling-imds-listener is true")
+		}
+
+		if enableAutoscalingImdsListener && snsTopic != "" {
+			logger.Warn("The autoscaling and autoscaling-imds listeners are both configured. This could cause duplicate lifecycle events to be sent. If possible, the autoscaling-imds listerner should be preferred.")
 		}
 
 		region := os.Getenv("AWS_REGION")
@@ -168,6 +191,9 @@ func main() {
 			SpotRebalancesEnabled:        enableSpotRebalances,
 			SpotListenerInterval:         spotListenerInterval,
 			AutoscalingHeartbeatInterval: autoscalingHeartbeatInterval,
+			AutoscalingImdsListener:      enableAutoscalingImdsListener,
+			AutoscalingGroupName:         autoscalingGroupName,
+			LifecycleHookName:            lifecycleHookName,
 		}, sess, logger)
 
 		notice, err := daemon.Start(ctx)
